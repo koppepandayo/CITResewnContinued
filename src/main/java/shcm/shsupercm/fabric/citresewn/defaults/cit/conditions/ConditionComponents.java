@@ -38,6 +38,16 @@ public class ConditionComponents extends CITCondition {
             } else if (metadata.startsWith("display.Lore")) {
                 metadata = "minecraft:lore" + value.keyMetadata().substring("display.Lore".length());
                 CITResewn.logWarnLoading(properties.messageWithDescriptorOf("Using legacy nbt.display.Lore", value.position()));
+            } else if (metadata.startsWith("SkullOwner.Name")) {
+                // Pre-1.21 player heads stored their owner as an NBT compound
+                // (SkullOwner: {Name: "...", Id: [I;...], ...}); 26.2 replaced that entirely with the
+                // minecraft:profile component (a ResolvableProfile, confirmed by decompiling it and
+                // its Codec - a name-only profile like this always encodes its "name" as a plain
+                // top-level string field). Only the "Name" sub-path is mapped since that's the only
+                // one any real CIT pack (including this one) actually keys off of - matching a head
+                // by a specific known skin owner name (e.g. "MHF_ArrowDown").
+                metadata = "minecraft:profile.name" + value.keyMetadata().substring("SkullOwner.Name".length());
+                CITResewn.logWarnLoading(properties.messageWithDescriptorOf("Using legacy nbt.SkullOwner.Name", value.position()));
             } else
                 throw new CITParsingException("NBT condition is not supported since 1.21", properties, value.position());
         }

@@ -1,5 +1,8 @@
 package shcm.shsupercm.fabric.citresewn.defaults.cit.types;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.client.resources.model.cuboid.CuboidModel;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
@@ -12,7 +15,9 @@ import shcm.shsupercm.fabric.citresewn.pack.format.PropertyGroup;
 import shcm.shsupercm.fabric.citresewn.pack.format.PropertyKey;
 import shcm.shsupercm.fabric.citresewn.pack.format.PropertyValue;
 
+import java.io.IOException;
 import java.io.Reader;
+import java.io.StringReader;
 import java.util.*;
 
 /**
@@ -21,12 +26,21 @@ import java.util.*;
  * {@code JsonUnbakedModel}/{@code ModelOverrideList}/{@code BakedModel} — none of which exist
  * anymore (26.2's item model system is {@code ItemModel}/{@code SelectItemModel}/
  * {@code ConditionalItemModel}, entirely component-driven, with no equivalent low-level baking
- * entry point). Per-condition sub-item model overrides (e.g. bow pulling stages) remain out of
- * scope; a plain {@code model=} (one static custom model per CIT rule, the overwhelming majority
- * of real-world usage) is parsed here via {@link CuboidModel#fromStream} — the same public
- * vanilla entry point real resourcepack `models/*.json` files are loaded through — and baked as
- * an extra {@code ItemStackRenderState} layer by {@code ItemModelResolverMixin}, the same
- * "cancel nothing, append a layer" strategy already used for {@link #texture}/{@code tile}.
+ * entry point). Per-condition sub-item *model* overrides remain out of scope; a plain
+ * {@code model=} (one static custom model per CIT rule, the overwhelming majority of real-world
+ * usage) is parsed here via {@link CuboidModel#fromStream} — the same public vanilla entry point
+ * real resourcepack `models/*.json` files are loaded through — and baked as an extra
+ * {@code ItemStackRenderState} layer by {@code ItemModelResolverMixin}, the same "cancel nothing,
+ * append a layer" strategy already used for {@link #texture}/{@code tile}.
+ * <p>
+ * Per-condition sub-item *texture* overrides ({@code texture.<key>=}, e.g. a bow's
+ * {@code texture.bow_pulling_0=}) are a separate, much more common OptiFine convention — every
+ * {@link PropertyValue#keyMetadata()}-tagged {@code texture}/{@code tile} entry lands in
+ * {@link #keyedTextures}, keyed by the same suffix names vanilla's own item model overrides use
+ * (e.g. "bow", "bow_pulling_1", "broken_elytra"). {@code ItemModelResolverMixin} picks which key
+ * applies to the current render by mirroring vanilla's own bow/elytra override conditions
+ * (see its {@code citresewn$resolveKeyedTextureKey}) rather than reimplementing the entire
+ * item-properties dispatch system generically.
  */
 public class TypeItem extends CITType {
     /** Registered as a "citresewn:type" entrypoint in fabric.mod.json. */
@@ -36,6 +50,7 @@ public class TypeItem extends CITType {
 
     public Identifier texture;
     public CuboidModel model;
+    public final Map<String, Identifier> keyedTextures = new LinkedHashMap<>();
 
     @Override
     public Set<PropertyKey> typeProperties() {
@@ -52,6 +67,8 @@ public class TypeItem extends CITType {
             throw new CITParsingException("Not targeting any item type", properties, -1);
 
         PropertyValue modelProp = properties.getLastWithoutMetadata("citresewn", "model");
+        PropertyValue textureProp = properties.getLastWithoutMetadata("citresewn", "texture", "tile");
+
         if (modelProp != null) {
             Identifier modelId = resolveAsset(properties.identifier, modelProp, "models", ".json", resourceManager);
             if (modelId == null)
@@ -60,21 +77,85 @@ public class TypeItem extends CITType {
             if (modelResource.isEmpty())
                 throw new CITParsingException("Could not resolve a replacement model", properties, modelProp.position());
             try (Reader reader = modelResource.get().openAsReader()) {
-                model = CuboidModel.fromStream(reader);
+                model = parseModelResolvingTextures(modelId, reader, resourceManager);
             } catch (Exception e) {
                 throw new CITParsingException("Could not parse replacement model: " + e.getMessage(), properties, modelProp.position());
             }
+        } else if (textureProp == null) {
+            // Neither model= nor texture=/tile= was given at all - OptiFine's implicit "same name as
+            // this properties file" convention (see resolveAsset's null-path branch), tried model
+            // (.json) first then texture (.png), mirroring upstream's own fallback order exactly.
+            // Several real-world CITs in this pack (e.g. point_shop.properties + point_shop.png,
+            // 127.properties + 127.json/127.png) rely entirely on this and previously always failed
+            // to load with "Could not resolve a replacement texture", since this branch was never
+            // even attempted without an explicit property line.
+            Identifier implicitModelId = resolveAsset(properties.identifier, (PropertyValue) null, "models", ".json", resourceManager);
+            if (implicitModelId != null) {
+                try (Reader reader = resourceManager.getResource(implicitModelId).get().openAsReader()) {
+                    model = parseModelResolvingTextures(implicitModelId, reader, resourceManager);
+                } catch (Exception e) {
+                    throw new CITParsingException("Could not parse replacement model: " + e.getMessage(), properties, -1);
+                }
+            } else {
+                texture = resolveAsset(properties.identifier, (PropertyValue) null, "textures", ".png", resourceManager);
+            }
         }
 
-        PropertyValue textureProp = properties.getLastWithoutMetadata("citresewn", "texture", "tile");
         if (textureProp != null) {
             texture = resolveAsset(properties.identifier, textureProp, "textures", ".png", resourceManager);
             if (texture == null)
                 throw new CITParsingException("Could not resolve a replacement texture", properties, -1);
         }
 
-        if (texture == null && model == null)
+        for (PropertyValue value : properties.get("citresewn", "texture", "tile")) {
+            if (value.keyMetadata() == null)
+                continue;
+            Identifier keyedTexture = resolveAsset(properties.identifier, value, "textures", ".png", resourceManager);
+            if (keyedTexture == null)
+                throw new CITParsingException("Could not resolve a replacement texture", properties, value.position());
+            keyedTextures.put(value.keyMetadata(), keyedTexture);
+        }
+
+        if (texture == null && model == null && keyedTextures.isEmpty())
             throw new CITParsingException("Could not resolve a replacement texture", properties, -1);
+    }
+
+    /**
+     * A {@code model=} file's own {@code "textures"} values use the same OptiFine CIT relative-path
+     * convention as {@code texture=}/{@code tile=} (see {@link #resolveAsset}) - {@code "./foo"}, a
+     * bare filename, etc, resolved relative to the <em>model file's own location</em> - not the
+     * Mojang-style absolute/{@code textures/}-relative references a real resourcepack model JSON
+     * normally uses. Vanilla's own {@link CuboidModel}/{@code TextureSlots} deserializer has no
+     * notion of this convention and parses such a value into a nonsensical literal {@link Identifier}
+     * (e.g. {@code "./arrow_back"} becomes {@code minecraft:./arrow_back}), which then never
+     * resolves to any real atlas sprite anywhere downstream - confirmed by "Invalid segment '.' in
+     * path" log spam and every such icon rendering as the atlas's missing-texture checkerboard. Every
+     * texture value is rewritten to its correctly-resolved real resource path (matching exactly how
+     * {@code texture=}/{@code tile=} resolves) before handing the JSON to vanilla's own parser. A
+     * value starting with {@code #} is a vanilla texture-variable reference, not a path, and is left
+     * untouched - {@code TextureSlots} resolves those internally on its own.
+     */
+    public static CuboidModel parseModelResolvingTextures(Identifier modelIdentifier, Reader reader, ResourceManager resourceManager) throws IOException {
+        JsonElement root = JsonParser.parseReader(reader);
+        if (root.isJsonObject()) {
+            JsonObject rootObject = root.getAsJsonObject();
+            JsonElement texturesElement = rootObject.get("textures");
+            if (texturesElement != null && texturesElement.isJsonObject()) {
+                JsonObject textures = texturesElement.getAsJsonObject();
+                for (String key : new ArrayList<>(textures.keySet())) {
+                    JsonElement value = textures.get(key);
+                    if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString())
+                        continue;
+                    String rawValue = value.getAsString();
+                    if (rawValue.startsWith("#"))
+                        continue;
+                    Identifier resolved = resolveAsset(modelIdentifier, rawValue, "textures", ".png", resourceManager);
+                    if (resolved != null)
+                        textures.addProperty(key, resolved.toString());
+                }
+            }
+        }
+        return CuboidModel.fromStream(new StringReader(root.toString()));
     }
 
     public static class Container extends CITTypeContainer<TypeItem> {

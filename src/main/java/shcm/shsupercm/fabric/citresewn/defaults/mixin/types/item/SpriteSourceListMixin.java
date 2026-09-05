@@ -21,6 +21,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import shcm.shsupercm.fabric.citresewn.CITResewn;
+import shcm.shsupercm.fabric.citresewn.defaults.cit.types.TypeItem;
 import shcm.shsupercm.fabric.citresewn.defaults.item.CitSpriteAnimation;
 import shcm.shsupercm.fabric.citresewn.pack.PackParser;
 
@@ -123,10 +124,17 @@ public abstract class SpriteSourceListMixin {
         Set<Identifier> seen = new HashSet<>();
         int added = 0;
         for (FileToIdConverter modelFinder : citresewn$CIT_MODEL_JSON_FINDERS) {
-            for (Resource modelResource : modelFinder.listMatchingResources(resourceManager).values()) {
+            for (Map.Entry<Identifier, Resource> entry : modelFinder.listMatchingResources(resourceManager).entrySet()) {
+                Identifier modelId = entry.getKey();
+                Resource modelResource = entry.getValue();
                 CuboidModel model;
                 try (Reader reader = modelResource.openAsReader()) {
-                    model = CuboidModel.fromStream(reader);
+                    // Resolves each of the model's own "textures" values through the same CIT
+                    // relative-path convention texture=/tile= uses (see
+                    // TypeItem#parseModelResolvingTextures) - without this, vanilla's own parser
+                    // turns a "./foo"-style value into a nonsensical literal Identifier that never
+                    // matches any real sprite, and this scan (silently) never injects that texture.
+                    model = TypeItem.parseModelResolvingTextures(modelId, reader, resourceManager);
                 } catch (Exception e) {
                     // Not every "<root>/cit/**.json" is necessarily a citresewn model= target (could
                     // be some other tool's metadata file sharing the same tree) - skip quietly rather
@@ -140,8 +148,11 @@ public abstract class SpriteSourceListMixin {
                     if (material == null || !seen.add(material.sprite()))
                         continue;
 
+                    // material.sprite() is already the fully-resolved real resource path (see
+                    // TypeItem#parseModelResolvingTextures) - the same convention TypeItem#texture
+                    // uses - so it's looked up directly, with no further "textures/"/".png" wrapping.
                     Identifier texture = material.sprite();
-                    Optional<Resource> textureResource = resourceManager.getResource(texture.withPath(p -> "textures/" + p + ".png"));
+                    Optional<Resource> textureResource = resourceManager.getResource(texture);
                     if (textureResource.isEmpty())
                         continue;
 

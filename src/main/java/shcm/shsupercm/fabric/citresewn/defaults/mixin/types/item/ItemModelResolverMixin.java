@@ -31,8 +31,10 @@ import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
 import net.minecraft.world.entity.ItemOwner;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import org.joml.Vector3f;
 import org.joml.Vector3fc;
@@ -166,9 +168,39 @@ public abstract class ItemModelResolverMixin {
         // using it directly disambiguates every rule from every other one, texture or model.
         state.appendModelIdentityElement(cit.type);
 
-        List<BakedQuad> mesh = cit.type.model != null
-                ? citresewn$modelMeshFor(cit.type.model)
-                : cit.type.texture != null ? citresewn$meshFor(cit.type.texture) : List.of();
+        // A rule with texture.<key>= entries (e.g. a bow's texture.bow_pulling_0=) picks its
+        // texture the same way vanilla's own bow/elytra item models do - see
+        // citresewn$resolveKeyedTextureKey - falling back to the plain texture=/tile= (if any)
+        // when no keyed entry matches the current key (e.g. a bow CIT with no texture.bow=
+        // override for the resting pose keeps showing vanilla's own resting bow otherwise, but
+        // here it just means "no CIT texture for this state," same as any other unmatched rule).
+        Identifier effectiveTexture = cit.type.texture;
+        if (!cit.type.keyedTextures.isEmpty()) {
+            String key = citresewn$resolveKeyedTextureKey(stack, owner);
+            Identifier keyed = key != null ? cit.type.keyedTextures.get(key) : null;
+            if (keyed != null)
+                effectiveTexture = keyed;
+        }
+
+        // A model= with no own geometry (relies entirely on "parent": "item/generated" - see
+        // citresewn$modelMeshFor) is really just a flat texture-swap icon wearing a model= skin -
+        // the overwhelming majority of this pack's model= rules (every stick_menu icon) are exactly
+        // this. Routing it through the SAME path as a plain texture=/tile= CIT (rather than the
+        // dedicated 3D-model baking below) is what gives it CIT spritesheet animation support for
+        // free: citresewn$modelMeshFor bakes once and caches forever with no notion of "current
+        // frame" at all, so an animated spinning-head icon authored as model= previously always
+        // froze on whatever frame happened to be baked first.
+        boolean flatModel = cit.type.model != null && cit.type.model.geometry() == null;
+        if (flatModel)
+            effectiveTexture = citresewn$modelFlatTexture(cit.type.model);
+
+        List<BakedQuad> mesh;
+        if (cit.type.model != null && !flatModel)
+            mesh = citresewn$modelMeshFor(cit.type.model);
+        else if (effectiveTexture != null)
+            mesh = citresewn$meshFor(effectiveTexture);
+        else
+            mesh = List.of();
         if (mesh.isEmpty())
             return;
 
@@ -182,24 +214,84 @@ public abstract class ItemModelResolverMixin {
         // whenever item.hasFoil() is true, in addition to CIT spritesheet cycling - the enchant
         // glint shimmer is itself an animated effect, so a foiled item never marked animated gets
         // its GUI icon snapshotted once and never redrawn, which reads as "no glint in the GUI".
-        if ((cit.type.texture != null && CitSpriteAnimation.get(cit.type.texture) != null) || stack.hasFoil())
+        // A CIT spritesheet whose own .mcmeta ships a real (non-empty) "frames" list - unlike the
+        // usual "frames": [] CIT convention that deliberately disables vanilla's own animation - is
+        // instead loaded as a genuinely vanilla-animated TextureAtlasSprite by SpriteSourceListMixin
+        // (its own animation ticks the atlas's pixel data automatically, no per-frame mesh rebaking
+        // needed), so CitSpriteAnimation never gets registered for it at all - only checking that
+        // registry left every such icon (e.g. gacha.png, whose mcmeta lists real frame indices)
+        // permanently frozen on whatever frame happened to be visible at snapshot time.
+        boolean vanillaAnimatedSprite = effectiveTexture != null && citresewn$isRealSpriteAnimated(effectiveTexture);
+        if ((effectiveTexture != null && CitSpriteAnimation.get(effectiveTexture) != null) || vanillaAnimatedSprite || stack.hasFoil())
             state.setAnimated();
         // A model= CIT's own "display" block (thirdperson/gui/head/... transforms authored
         // alongside its geometry) is respected instead of the generic flat-icon transforms below,
         // the same way vanilla honors a real model's own display block - without this a custom
         // 3D model (rather than a flat texture swap) would render at the wrong size/rotation in
-        // every context but never at the size/pose its author actually tuned it for.
+        // every context but never at the size/pose its author actually tuned it for. transforms()
+        // is null exactly when geometry() is null for the same reason (e.g. "parent":
+        // "item/generated" with no own "display" block, like every stick_menu icon) - falls back
+        // to the same standard flat-icon transforms used for a plain texture=/tile= CIT.
         ItemStackRenderState.LayerRenderState layer = state.newLayer();
         layer.clear();
-        layer.setItemTransform(cit.type.model != null ? cit.type.model.transforms().getTransform(displayContext) : citresewn$transformFor(displayContext));
+        ItemTransform itemTransform = cit.type.model != null && cit.type.model.transforms() != null
+                ? cit.type.model.transforms().getTransform(displayContext)
+                : citresewn$transformFor(displayContext);
+        layer.setItemTransform(itemTransform);
         layer.setFoilType(stack.hasFoil() ? ItemStackRenderState.FoilType.STANDARD : ItemStackRenderState.FoilType.NONE);
         // Defaults to false (flat, uniformly-lit "2D icon" rig) - correct for the flat texture-swap
-        // path, but a real multi-face model= needs the same per-face-normal shading a block gets
-        // (GuiItemAtlas#drawToSlot picks ITEMS_3D vs ITEMS_FLAT lighting from exactly this flag),
-        // or every face bakes at full brightness with no shading between faces - reads as
-        // washed-out/too bright compared to how a real 3D item model is supposed to look.
-        layer.setUsesBlockLight(cit.type.model != null);
+        // path, but a real multi-face model= (one with its own "elements") needs the same
+        // per-face-normal shading a block gets (GuiItemAtlas#drawToSlot picks ITEMS_3D vs
+        // ITEMS_FLAT lighting from exactly this flag), or every face bakes at full brightness with
+        // no shading between faces - reads as washed-out/too bright compared to how a real 3D item
+        // model is supposed to look. A model= with no own geometry (falls back to
+        // ItemModelGenerator - see citresewn$modelMeshFor) is just a flat icon under the hood,
+        // exactly like a plain texture=/tile= CIT, and must keep flat lighting too - forcing block
+        // lighting on it instead read as unevenly dark/shaded compared to every other flat icon.
+        layer.setUsesBlockLight(cit.type.model != null && cit.type.model.geometry() != null);
         layer.prepareQuadList().addAll(mesh);
+    }
+
+    /**
+     * Picks which {@code texture.<key>=} entry (see {@link TypeItem#keyedTextures}) applies to the
+     * current render, by mirroring vanilla's own item model conditions for the handful of vanilla
+     * items real CIT packs actually key textures by name for - confirmed against this version's
+     * own {@code assets/minecraft/items/bow.json}/{@code elytra.json} and their backing
+     * {@code IsUsingItem}/{@code UseDuration}/{@code Broken} property classes, rather than
+     * reimplementing the entire (much larger) generic item-properties dispatch system:
+     * <ul>
+     *   <li>bow/crossbow: "bow" at rest; while drawing, {@code (useDuration ticks) * 0.05} ranged
+     *       against vanilla's own 0.65/0.9 thresholds picks "bow_pulling_0/1/2" - the same
+     *       {@code minecraft:using_item} + {@code minecraft:use_duration} condition/range-dispatch
+     *       bow.json itself uses.</li>
+     *   <li>elytra: "broken_elytra" once {@link ItemStack#nextDamageWillBreak()} (vanilla's own
+     *       {@code minecraft:broken} condition), otherwise no key (falls through to whatever the
+     *       rule's plain {@code texture=} would show, if any - most "broken" CITs like this pack's
+     *       don't define one, so nothing at all outside that state, same as not matching).</li>
+     * </ul>
+     * Returns null for any other item - a rule keying textures by name on some other item simply
+     * never finds a match and falls back to its plain {@code texture=}/{@code tile=}, if any.
+     */
+    private static String citresewn$resolveKeyedTextureKey(ItemStack stack, ItemOwner owner) {
+        if (stack.is(Items.BOW) || stack.is(Items.CROSSBOW)) {
+            LivingEntity entity = owner == null ? null : owner.asLivingEntity();
+            boolean usingThisStack = entity != null && entity.isUsingItem() && entity.getUseItem() == stack;
+            if (!usingThisStack)
+                return "bow";
+
+            int ticksInUse = stack.getUseDuration(entity) - entity.getUseItemRemainingTicks();
+            float pull = ticksInUse * 0.05f;
+            if (pull >= 0.9f)
+                return "bow_pulling_2";
+            if (pull >= 0.65f)
+                return "bow_pulling_1";
+            return "bow_pulling_0";
+        }
+
+        if (stack.is(Items.ELYTRA))
+            return stack.nextDamageWillBreak() ? "broken_elytra" : null;
+
+        return null;
     }
 
     /**
@@ -284,6 +376,21 @@ public abstract class ItemModelResolverMixin {
     }
 
     /**
+     * True for a CIT sprite whose own .mcmeta ships a real (non-empty) "frames" list - i.e. one
+     * {@link SpriteSourceListMixin#loadCitSprite} let load as an ordinary, genuinely
+     * vanilla-animated {@link TextureAtlasSprite} instead of the usual CIT "frames": []
+     * (deliberately-disabled) convention {@link CitSpriteAnimation} tracks by hand. Such a sprite's
+     * pixel data is ticked automatically by vanilla itself - no per-frame mesh rebaking needed -
+     * but {@code ItemStackRenderState.setAnimated()} still needs to know about it, or
+     * GuiItemAtlas's offscreen icon snapshot never gets asked to redraw and stays frozen on
+     * whichever frame happened to be visible the moment it was first cached.
+     */
+    private static boolean citresewn$isRealSpriteAnimated(Identifier texture) {
+        TextureAtlasSprite sprite = citresewn$getRealSprite(texture);
+        return sprite != null && sprite.contents().isAnimated();
+    }
+
+    /**
      * Bakes a plain, non-animated CIT icon through vanilla's real {@link ItemModelGenerator} -
      * the same {@code FaceBakery.bakeQuad}-based front/back-plus-silhouette-rim algorithm, correct
      * winding, correct UVs, correct lighting, that every ordinary flat item in the game uses -
@@ -305,13 +412,18 @@ public abstract class ItemModelResolverMixin {
     }
 
     /**
-     * A CIT {@code model=} rule (see {@link TypeItem#model}) is a genuine multi-element custom
-     * model - unlike the flat texture-swap path, its geometry is baked as-authored via
-     * {@link CuboidModel#geometry()} instead of reimplementing {@link ItemModelGenerator}'s
-     * front/back-plus-rim algorithm. One model instance never changes shape/textures across
-     * renders, so the baked mesh is cached by the {@link CuboidModel} instance itself (a record,
-     * so this is also correct if the same parsed model were ever reused - equals/hashCode are
-     * structural, not identity).
+     * A CIT {@code model=} rule (see {@link TypeItem#model}) with its own "elements" is a genuine
+     * multi-element custom model - unlike the flat texture-swap path, its geometry is baked
+     * as-authored via {@link CuboidModel#geometry()} instead of reimplementing
+     * {@link ItemModelGenerator}'s front/back-plus-rim algorithm. Only ever called for a model
+     * with real geometry of its own - see {@code citresewn$item}'s {@code flatModel} check, which
+     * routes a model with no "elements" (relies entirely on "parent": "item/generated" for shape,
+     * e.g. every stick_menu icon) through {@link #citresewn$modelFlatTexture}/
+     * {@link #citresewn$meshFor} instead, the same path a plain {@code texture=}/{@code tile=} CIT
+     * uses - that path (unlike this one) supports CIT spritesheet frame animation. One model
+     * instance never changes shape/textures across renders, so the baked mesh is cached by the
+     * {@link CuboidModel} instance itself (a record, so this is also correct if the same parsed
+     * model were ever reused - equals/hashCode are structural, not identity).
      */
     private static final Map<CuboidModel, List<BakedQuad>> citresewn$modelMeshCache = new ConcurrentHashMap<>();
 
@@ -320,6 +432,19 @@ public abstract class ItemModelResolverMixin {
             ModelDebugName debugName = () -> "citresewn item model: " + m.parent();
             return citresewn$bakeGeometry(m.geometry(), m.textureSlots(), debugName);
         });
+    }
+
+    /**
+     * Resolves the "layer0" material of a flat (no own "elements") {@code model=} - the same slot
+     * name {@link #citresewn$buildVanillaGeneratedMesh} feeds vanilla's own {@link ItemModelGenerator}
+     * for a plain {@code texture=}/{@code tile=} icon - so its texture can be routed through the
+     * exact same (animation-aware) flat-icon path instead of the static, cache-forever
+     * {@link #citresewn$modelMeshFor}.
+     */
+    private static Identifier citresewn$modelFlatTexture(CuboidModel model) {
+        TextureSlots resolved = new TextureSlots.Resolver().addLast(model.textureSlots()).resolve(() -> "citresewn flat model= texture");
+        Material material = resolved.getMaterial("layer0");
+        return material != null ? material.sprite() : null;
     }
 
     /**
