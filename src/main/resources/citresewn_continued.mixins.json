@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "shcm.shsupercm.fabric.citresewn.defaults.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "types.armor.EquipmentClientInfoLayerMixin",
+    "types.armor.EquipmentLayerRendererMixin",
+    "types.armor.ItemStackMixin",
+    "types.elytra.ItemStackMixin",
+    "types.elytra.WingsLayerMixin",
+    "types.item.ItemModelResolverMixin",
+    "types.item.ItemStackMixin",
+    "types.item.SpriteSourceListMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

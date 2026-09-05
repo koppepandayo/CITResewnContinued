@@ -1,0 +1,18 @@
+{
+  "config.citresewn_continued.title": "CIT Resewn: Continued Configuration",
+
+  "config.citresewn_continued.enabled.title": "Enabled",
+  "config.citresewn_continued.enabled.tooltip": "Should CIT Resewn load and inject cits from resourcepacks",
+
+  "config.citresewn_continued.mute_errors.title": "Mute loading errors",
+  "config.citresewn_continued.mute_errors.tooltip": "Should CIT Resewn not log cit errors",
+
+  "config.citresewn_continued.mute_warns.title": "Mute loading warnings",
+  "config.citresewn_continued.mute_warns.tooltip": "Should CIT Resewn not log cit warnings",
+
+  "config.citresewn_continued.cache_ms.title": "Cache",
+  "config.citresewn_continued.cache_ms.tooltip": "How often should the cit cache be refreshed.\nHigher values will give more performance.\nLower values will make cits update faster.\nREALTIME will remove the cache entirely,\n making items check for cits every frame.",
+  "config.citresewn_continued.cache_ms.ticks.0": "REALTIME",
+  "config.citresewn_continued.cache_ms.ticks.1": "EVERY TICK",
+  "config.citresewn_continued.cache_ms.ticks.any": "EVERY %s TICKS"
+}

@@ -1,0 +1,27 @@
+# gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# eclipse
+.project
+bin/
+.classpath
+.settings/
+
+# idea
+.idea/
+out/
+*.ipr
+*.iws
+*.iml
+
+# vscode
+.vscode/
+
+# fabric loom dev environment (test worlds, resourcepacks, logs, etc.)
+run/
+
+# os
+.DS_Store
+Thumbs.db

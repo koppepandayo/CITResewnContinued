@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "citresewn_continued",
+  "version": "${version}",
+  "name": "CIT Resewn: Continued",
+  "description": "Unofficial continuation of SHsuperCM's CIT Resewn (archived, last release targeted 1.21.1), ported to Minecraft ${minecraft_version}. Re-implements MCPatcher/OptiFine's CIT (Custom Item Textures).",
+  "authors": [
+    "SHsuperCM (original CIT Resewn)",
+    "koppepandayo (26.2 port)"
+  ],
+  "license": "MIT",
+  "icon": "assets/citresewn_continued/logo.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "shcm.shsupercm.fabric.citresewn.CITResewn"
+    ],
+    "modmenu": [
+      "shcm.shsupercm.fabric.citresewn.config.CITResewnModMenu"
+    ],
+    "citresewn:type": [
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.types.TypeArmor::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.types.TypeElytra::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.types.TypeItem::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.types.TypeEnchantment::CONTAINER"
+    ],
+    "citresewn:condition": [
+      "shcm.shsupercm.fabric.citresewn.cit.builtin.conditions.core.FallbackCondition::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.cit.builtin.conditions.core.WeightCondition::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionItems::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionDamage::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionDamageMask::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionEnchantments::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionEnchantmentLevels::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionHand::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionStackSize::CONTAINER",
+      "shcm.shsupercm.fabric.citresewn.defaults.cit.conditions.ConditionComponents::CONTAINER"
+    ],
+    "citresewn:global_property": [
+      "shcm.shsupercm.fabric.citresewn.cit.builtin.conditions.core.FallbackCondition::globalProperty"
+    ]
+  },
+  "mixins": [
+    "citresewn_continued.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "*",
+    "fabric-resource-loader-v1": "*",
+    "minecraft": "${minecraft_version}"
+  },
+  "recommends": {
+    "modmenu": "*",
+    "cloth-config2": "*"
+  },
+  "contact": {
+    "sources": "https://github.com/SHsuperCM/CITResewn"
+  }
+}

@@ -1,0 +1,78 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.17.13'
+    id 'maven-publish'
+}
+
+version = "${project.mod_version}-fabric-${project.minecraft_version}"
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    maven { url 'https://maven.terraformersmc.com/releases/' }
+    maven { url 'https://maven.shedaniel.me/' }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // ModMenuの設定ボタンから開くConfig画面(Cloth Config)。どちらも無くても動くように
+    // compileOnly(コンパイル専用、jarに同梱しない、実行時は無くてもクラッシュしない)。
+    // このMC(26.2)は非難読化配布のためLoomのmod*/remap系設定が使えない
+    // ("Cannot add remap configuration in a non-obfuscated environment")。その代わり
+    // cloth-configは26.2向けにビルドされた26.2.155をそのまま使えば変換不要でそのまま噛み合う。
+    compileOnly "com.terraformersmc:modmenu:20.0.1"
+    compileOnly "me.shedaniel.cloth:cloth-config-fabric:26.2.155"
+}
+
+processResources {
+    inputs.property "version", project.version
+    inputs.property "mod_version", project.mod_version
+    inputs.property "minecraft_version", project.minecraft_version
+    inputs.property "loader_version", project.loader_version
+    filteringCharset "UTF-8"
+
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version,
+                "mod_version": project.mod_version,
+                "minecraft_version": project.minecraft_version,
+                "loader_version": project.loader_version
+    }
+}
+
+def targetJavaVersion = 25
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = "UTF-8"
+    if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
+        it.options.release.set(targetJavaVersion)
+    }
+}
+
+java {
+    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+    if (JavaVersion.current() < javaVersion) {
+        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    }
+}
+
+jar {
+    from("LICENSE") {
+        rename { "${it}_${project.archives_base_name}" }
+    }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = project.archives_base_name
+            from components.java
+        }
+    }
+    repositories {
+    }
+}
